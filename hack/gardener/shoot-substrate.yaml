@@ -1,0 +1,133 @@
+# Shoot cluster spec for running Agent Substrate on Gardener (AWS, eu-central-1).
+#
+# All feature gates and runtimeConfig required by substrate are baked in so no
+# post-creation patching is needed. Key requirements:
+#   - k8s 1.36+ (PodCertificateRequest API first available here)
+#   - ClusterTrustBundle + ClusterTrustBundleProjection + PodCertificateRequest on
+#     apiserver, controller-manager, and kubelet (see docs/install-gardener.md)
+#   - runtimeConfig for podcertificaterequests (beta API not served by default in 1.36)
+#   - gVisor container runtime on workers (required by the default SandboxConfig)
+#   - bpfSocketLBHostnsOnly=true on Cilium (required for gVisor pods to reach ClusterIP)
+#
+# Usage:
+#   # Edit NAME below (must be unique in your Gardener project)
+#   kubectl --kubeconfig kubeconfig-garden-<project>.yaml apply -f shoot-substrate.yaml
+#   # Wait ~15 min for the shoot to reach Succeeded
+#   # Then follow docs/install-gardener.md Step 2 onward
+apiVersion: core.gardener.cloud/v1beta1
+kind: Shoot
+metadata:
+  name: pb4-substrate            # <-- change for a new cluster
+  namespace: garden-pb-aws
+spec:
+  cloudProfile:
+    kind: CloudProfile
+    name: aws
+  credentialsBindingName: pb-aws-secret
+  region: eu-central-1
+  purpose: evaluation
+
+  # ── Kubernetes ────────────────────────────────────────────────────────────────
+  kubernetes:
+    version: "1.36.3"
+
+    kubeAPIServer:
+      featureGates:
+        ClusterTrustBundle: true
+        ClusterTrustBundleProjection: true   # MUST be here AND on kubelet
+        PodCertificateRequest: true
+      runtimeConfig:
+        # Enable the certificates.k8s.io/v1beta1 API group
+        certificates.k8s.io/v1beta1: true
+        # Enable PodCertificateRequest endpoint (beta, not served by default in 1.36)
+        certificates.k8s.io/v1beta1/podcertificaterequests: true
+
+    kubeControllerManager:
+      featureGates:
+        ClusterTrustBundle: true
+        PodCertificateRequest: true
+
+    kubelet:
+      featureGates:
+        ClusterTrustBundle: true
+        ClusterTrustBundleProjection: true   # MUST be here AND on apiserver
+        PodCertificateRequest: true
+
+  # ── Networking (Cilium, dual-stack) ──────────────────────────────────────────
+  networking:
+    type: cilium
+    ipFamilies:
+      - IPv6
+      - IPv4
+    nodes: 10.180.0.0/16
+    providerConfig:
+      apiVersion: cilium.networking.extensions.gardener.cloud/v1alpha1
+      kind: NetworkConfig
+      # Required for gVisor pods to reach ClusterIP services.
+      # Without this, socket-LB cgroup hooks bypass the gVisor network stack.
+      bpfSocketLBHostnsOnly:
+        enabled: true
+      overlay:
+        enabled: false
+      hubble:
+        enabled: true
+
+  # ── Extensions ────────────────────────────────────────────────────────────────
+  extensions:
+    - type: shoot-dns-service
+      providerConfig:
+        apiVersion: service.dns.extensions.gardener.cloud/v1alpha1
+        kind: DNSConfig
+        syncProvidersFromShootSpecDNS: true
+    - type: shoot-cert-service
+
+  # ── Provider (AWS) ────────────────────────────────────────────────────────────
+  provider:
+    type: aws
+    controlPlaneConfig:
+      apiVersion: aws.provider.extensions.gardener.cloud/v1alpha1
+      kind: ControlPlaneConfig
+      loadBalancerController:
+        enabled: true
+    infrastructureConfig:
+      apiVersion: aws.provider.extensions.gardener.cloud/v1alpha1
+      kind: InfrastructureConfig
+      dualStack:
+        enabled: true
+      networks:
+        vpc:
+          cidr: 10.180.0.0/16
+        zones:
+          - name: eu-central-1a
+            workers:  10.180.0.0/19
+            public:   10.180.32.0/20
+            internal: 10.180.48.0/20
+          - name: eu-central-1b
+            workers:  10.180.64.0/19
+            public:   10.180.96.0/20
+            internal: 10.180.112.0/20
+          - name: eu-central-1c
+            workers:  10.180.128.0/19
+            public:   10.180.160.0/20
+            internal: 10.180.176.0/20
+    workers:
+      - name: worker-w
+        machine:
+          type: m5.large
+          image:
+            name: gardenlinux
+        minimum: 3
+        maximum: 30
+        maxSurge: 1
+        volume:
+          type: gp3
+          size: 50Gi
+        zones:
+          - eu-central-1a
+          - eu-central-1b
+          - eu-central-1c
+        cri:
+          name: containerd
+          containerRuntimes:
+            # gVisor runtime class — required by substrate's default SandboxConfig
+            - type: gvisor
