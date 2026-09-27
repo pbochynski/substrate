@@ -85,7 +85,7 @@ func (e *Env) applyBundledPostgres(ctx context.Context, plan postgresPlan) error
 // the kind overlay trims the StatefulSet to a laptop, the base file is sized
 // for a real node.
 func (e *Env) postgresManifestPath() string {
-	if e.Cfg.Kind {
+	if e.Cfg.Kind || e.Cfg.Gardener {
 		return e.Cfg.Manifest("kind", "postgres")
 	}
 	return e.Cfg.Manifest("postgres", "postgres.yaml")

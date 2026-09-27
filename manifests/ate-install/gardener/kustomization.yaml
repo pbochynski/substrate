@@ -1,0 +1,55 @@
+# Kustomize overlay for self-managed / Gardener Shoot clusters.
+#
+# Like the kind overlay but without Kind-specific bits:
+#   - no --localhost-registry-replacement
+#   - info log level (not debug)
+#   - S3/rustfs storage backend (same as kind; GCS is unavailable off-GCP)
+#
+# Prerequisites on the cluster:
+#   - certificates.k8s.io/v1beta1 enabled (ClusterTrustBundle + PodCertificate
+#     feature gates, or runtimeConfig certificates.k8s.io/v1beta1=true on
+#     Gardener Shoot)
+#   - A default StorageClass (for the rustfs PVC and postgres PVC)
+#   - gVisor runtime class present (Gardener gVisor extension, if desired)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../ate-api-server.yaml
+  - ../ate-controller.yaml
+  - ./atelet
+  - ../atenet-router.yaml
+  - ate-otel-config.yaml
+  - rustfs.yaml
+  - ./otel-collector.yaml
+  - ./prometheus.yaml
+
+# Storage settings: point ate-api-server at in-cluster rustfs (S3-compatible).
+# Same as kind overlay; GCS is not available on non-GCP clusters.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: OTEL_TRACES_SAMPLER
+                value: parentbased_always_on
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: us-east-1
+              - name: AWS_ENDPOINT_URL
+                value: http://rustfs.ate-system.svc:9000
+              - name: AWS_S3_USE_PATH_STYLE
+                value: "true"
+              - name: AWS_ACCESS_KEY_ID
+                value: rustfsadmin
+              - name: AWS_SECRET_ACCESS_KEY
+                value: rustfsadmin

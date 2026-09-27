@@ -92,6 +92,8 @@ func init() {
 	f := rootCmd.PersistentFlags()
 	f.BoolVar(&opts.Kind, "kind", false,
 		"Target a local Kind cluster: use the kind overlays, the local registry, and host-architecture builds (or ATE_INSTALL_KIND=true)")
+	f.BoolVar(&opts.Gardener, "gardener", false,
+		"Target a Gardener Shoot cluster: use S3/rustfs storage, --gcp-auth-for-image-pulls=false, linux/amd64 builds (or ATE_INSTALL_GARDENER=true)")
 	f.StringVar(&opts.Kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
 	f.StringVar(&opts.Context, "context", "", "Name of the kubeconfig context to use (defaults to KUBECTL_CONTEXT)")
 	f.StringVar(&opts.Router, "atenet-dataplane", "", "Atenet ingress and egress dataplane: envoy or agentgateway (default envoy)")

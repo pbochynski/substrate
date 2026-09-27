@@ -59,6 +59,8 @@ func SystemOverlay(cfg *config.Config) string {
 		return installDir + "/agentgateway"
 	case cfg.Kind:
 		return installDir + "/kind"
+	case cfg.Gardener:
+		return installDir + "/gardener"
 	default:
 		return installDir + "/base"
 	}

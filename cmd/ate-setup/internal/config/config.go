@@ -87,6 +87,11 @@ type Config struct {
 	// Kind selects the local Kind install profile (ATE_INSTALL_KIND).
 	Kind bool
 
+	// Gardener selects the Gardener Shoot install profile (ATE_INSTALL_GARDENER).
+	// Like Kind but without --localhost-registry-replacement and with info logging.
+	// Implies S3/rustfs storage, --gcp-auth-for-image-pulls=false.
+	Gardener bool
+
 	// Namespace is the namespace the control plane is installed into, from
 	// ATE_NAMESPACE. It defaults to the canonical installdefaults.SystemNamespace,
 	// so an install that does not set it is unaffected. The checked-in manifests
@@ -233,7 +238,8 @@ type CloudSQLConfig struct {
 // Options carries the raw flag values the root command collects, before
 // defaulting and validation.
 type Options struct {
-	Kind                                  bool
+	Kind     bool
+	Gardener bool
 	Kubeconfig                            string
 	Context                               string
 	Router                                string
@@ -269,11 +275,12 @@ func Load(opts Options) (*Config, error) {
 	// ATE_INSTALL_KIND is read as well as --kind: hack/install-ate-kind.sh
 	// selects the Kind profile by exporting it.
 	kind := opts.Kind || env["ATE_INSTALL_KIND"] == "true"
+	gardener := opts.Gardener || env["ATE_INSTALL_GARDENER"] == "true"
 
-	// Sourcing is skipped for Kind installs the same way the shell kind installer
+	// Sourcing is skipped for Kind or Gardener installs the same way the shell kind installer
 	// exports NO_DEV_ENV: the GKE-shaped variables in a developer's file would
 	// otherwise point a local install at a cloud project.
-	if !opts.NoDevEnv && !kind && os.Getenv("NO_DEV_ENV") == "" {
+	if !opts.NoDevEnv && !kind && !gardener && os.Getenv("NO_DEV_ENV") == "" {
 		path := filepath.Join(root, devEnvFile)
 		if _, statErr := os.Stat(path); statErr == nil {
 			sourced, srcErr := sourceShellEnv(path, root)
@@ -334,6 +341,7 @@ func Load(opts Options) (*Config, error) {
 	cfg := &Config{
 		Root:                     root,
 		Kind:                     kind,
+		Gardener:                 gardener,
 		Namespace:                firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
 		Kubeconfig:               kubeconfig,
 		Context:                  firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
@@ -375,6 +383,9 @@ func Load(opts Options) (*Config, error) {
 
 	if kind {
 		applyKindDefaults(cfg)
+	}
+	if gardener {
+		applyGardenerDefaults(cfg)
 	}
 
 	cfg.Router = firstNonEmpty(opts.Router, env["ATE_ATENET_DATAPLANE"], RouterEnvoy)
@@ -418,8 +429,19 @@ func applyKindDefaults(cfg *Config) {
 	kindClusterName := firstNonEmpty(cfg.shellEnv["KIND_CLUSTER_NAME"], "kind")
 	cfg.Context = firstNonEmpty(cfg.Context, "kind-"+kindClusterName)
 	cfg.KODockerRepo = firstNonEmpty(cfg.KODockerRepo, "localhost:5001")
-	cfg.KODefaultPlatforms = "linux/" + runtime.GOARCH
+	cfg.KODefaultPlatforms = firstNonEmpty(cfg.KODefaultPlatforms, "linux/"+runtime.GOARCH)
 	cfg.BucketName = "ate-snapshots"
+}
+
+// applyGardenerDefaults sets the Gardener Shoot install defaults:
+// - Clears GCP-specific fields (no Workload Identity, no GCS)
+// - Defaults to linux/amd64 builds (Gardener on AWS/GCP/Azure uses amd64 nodes)
+// - Defaults bucket name to ate-snapshots (used by rustfs)
+func applyGardenerDefaults(cfg *Config) {
+	cfg.ProjectID = ""
+	cfg.ClusterLocation = ""
+	cfg.KODefaultPlatforms = firstNonEmpty(cfg.KODefaultPlatforms, "linux/amd64")
+	cfg.BucketName = firstNonEmpty(cfg.BucketName, "ate-snapshots")
 }
 
 func validate(cfg *Config) error {
